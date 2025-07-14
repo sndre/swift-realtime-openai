@@ -365,6 +365,7 @@ private extension Conversation {
 			case let .responseFunctionCallArgumentsDone(event):
 				updateEvent(id: event.itemId) { functionCall in
 					functionCall.arguments = event.arguments
+                    functionCall.status = .completed
 				}
 			case .inputAudioBufferSpeechStarted:
 				isUserSpeaking = true
