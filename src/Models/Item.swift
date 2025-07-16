@@ -5,6 +5,7 @@ public enum Item: Identifiable, Equatable, Sendable {
 		case completed
 		case in_progress
 		case incomplete
+        case responded
 	}
 
 	public enum ItemRole: String, Codable, Sendable {
@@ -85,9 +86,7 @@ public enum Item: Identifiable, Equatable, Sendable {
 		public var arguments: String
 	}
 
-	public struct FunctionCallOutput: Identifiable, Codable, Equatable, Sendable {
-		/// The unique ID of the item.
-		public var id: String
+	public struct FunctionCallOutput: Codable, Equatable, Sendable {
 		/// The type of the item
 		private var type: String = "function_call_output"
 		/// The ID of the function call
@@ -95,8 +94,7 @@ public enum Item: Identifiable, Equatable, Sendable {
 		/// The output of the function call
 		public var output: String
 
-		public init(id: String, callId: String, output: String) {
-			self.id = id
+		public init(callId: String, output: String) {
 			self.callId = callId
 			self.output = output
 		}
@@ -113,7 +111,7 @@ public enum Item: Identifiable, Equatable, Sendable {
 			case let .functionCall(functionCall):
 				return functionCall.id
 			case let .functionCallOutput(functionCallOutput):
-				return functionCallOutput.id
+				return functionCallOutput.callId
 		}
 	}
 

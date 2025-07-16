@@ -297,7 +297,7 @@ public extension Conversation {
 }
 
 /// Event handling private API
-private extension Conversation {
+extension Conversation {
 	@MainActor func handleEvent(_ event: ServerEvent) {
 		switch event {
 			case let .error(event):
@@ -395,7 +395,7 @@ private extension Conversation {
 	}
 
 	@MainActor
-	func updateEvent(id: String, modifying closure: (inout Item.FunctionCall) -> Void) {
+	public func updateEvent(id: String, modifying closure: (inout Item.FunctionCall) -> Void) {
 		guard let index = entries.firstIndex(where: { $0.id == id }), case var .functionCall(functionCall) = entries[index] else {
 			return
 		}
