@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 @preconcurrency import AVFoundation
 
@@ -22,6 +23,9 @@ public final class Conversation: @unchecked Sendable {
 
 	/// A stream of errors that occur during the conversation.
 	public let errors: AsyncStream<ServerError>
+
+    /// A stream of timestamps each time AI stopped speaking.
+    public let audioReplyCompletions = PassthroughSubject<Date, Never>()
 
 	/// The unique ID of the conversation.
 	@MainActor public private(set) var id: String?
@@ -366,6 +370,7 @@ extension Conversation {
 				updateEvent(id: event.itemId) { functionCall in
 					functionCall.arguments = event.arguments
                     functionCall.status = .completed
+                    // todo: emit function call completed event and subscribe to it in RecipeConversation
 				}
 			case .inputAudioBufferSpeechStarted:
 				isUserSpeaking = true
@@ -434,7 +439,8 @@ private extension Conversation {
 			self.queuedSamples.popFirst()
 			if self.queuedSamples.isEmpty {
 				Task { @MainActor in
-					playerNode.pause()
+					playerNode.pause()                    
+                    audioReplyCompletions.send(Date())
 				}
 			}
 		}
