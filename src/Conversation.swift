@@ -374,7 +374,6 @@ extension Conversation {
 					functionCall.arguments = event.arguments
                     functionCall.status = .completed
                     toolCalls.send(functionCall)
-                    print("toolCalls.send: \(functionCall.callId)")
 				}
 			case .inputAudioBufferSpeechStarted:
 				isUserSpeaking = true
