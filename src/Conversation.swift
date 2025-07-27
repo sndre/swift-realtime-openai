@@ -27,6 +27,9 @@ public final class Conversation: @unchecked Sendable {
     /// A stream of timestamps each time AI stopped speaking.
     public let audioReplyCompletions = PassthroughSubject<Date, Never>()
 
+    /// A stream of tool calls by AI
+    public let toolCalls = PassthroughSubject<Item.FunctionCall, Never>()
+
 	/// The unique ID of the conversation.
 	@MainActor public private(set) var id: String?
 
@@ -370,7 +373,8 @@ extension Conversation {
 				updateEvent(id: event.itemId) { functionCall in
 					functionCall.arguments = event.arguments
                     functionCall.status = .completed
-                    // todo: emit function call completed event and subscribe to it in RecipeConversation
+                    toolCalls.send(functionCall)
+                    print("toolCalls.send: \(functionCall.callId)")
 				}
 			case .inputAudioBufferSpeechStarted:
 				isUserSpeaking = true
