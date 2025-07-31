@@ -210,41 +210,37 @@ public extension Conversation {
 	}
 
 	/// Handle the playback of audio responses from the model.
-	@MainActor func startHandlingVoice() throws {
-		guard !handlingVoice else { return }
-
-		guard let converter = AVAudioConverter(from: audioEngine.inputNode.outputFormat(forBus: 0), to: desiredFormat) else {
-			throw ConversationError.converterInitializationFailed
-		}
-		userConverter.set(converter)
-
-		audioEngine.attach(playerNode)
-		audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: converter.inputFormat)
-
-		#if os(iOS)
-		try audioEngine.inputNode.setVoiceProcessingEnabled(true)
-		#endif
-
-		audioEngine.prepare()
-		do {
-			try audioEngine.start()
-
-			#if os(iOS)
-			let audioSession = AVAudioSession.sharedInstance()
-			try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
-			try audioSession.setActive(true)
-			#endif
-
-			handlingVoice = true
-		} catch {
-			print("Failed to enable audio engine: \(error)")
-
-			audioEngine.disconnectNodeInput(playerNode)
-			audioEngine.disconnectNodeOutput(playerNode)
-
-			throw error
-		}
-	}
+    @MainActor func startHandlingVoice() throws {
+        guard !handlingVoice else { return }
+        
+        guard let converter = AVAudioConverter(from: audioEngine.inputNode.outputFormat(forBus: 0), to: desiredFormat) else {
+            throw ConversationError.converterInitializationFailed
+        }
+        userConverter.set(converter)
+        
+        audioEngine.attach(playerNode)
+        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: converter.inputFormat)
+        
+#if os(iOS)
+        let audioSession = AVAudioSession.sharedInstance()
+        try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        try audioSession.setActive(true)
+        try audioEngine.inputNode.setVoiceProcessingEnabled(true)
+#endif
+        
+        audioEngine.prepare()
+        do {
+            try audioEngine.start()
+            handlingVoice = true
+        } catch {
+            print("Failed to enable audio engine: \(error)")
+            
+            audioEngine.disconnectNodeInput(playerNode)
+            audioEngine.disconnectNodeOutput(playerNode)
+            
+            throw error
+        }
+    }
 
 	/// Interrupt the model's response if it's currently playing.
 	/// This lets the model know that the user didn't hear the full response.
