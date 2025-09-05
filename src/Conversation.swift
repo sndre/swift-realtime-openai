@@ -220,17 +220,19 @@ public extension Conversation {
         
         audioEngine.attach(playerNode)
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: converter.inputFormat)
-        
+
 #if os(iOS)
-        let audioSession = AVAudioSession.sharedInstance()
-        try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
-        try audioSession.setActive(true)
         try audioEngine.inputNode.setVoiceProcessingEnabled(true)
 #endif
-        
+
         audioEngine.prepare()
         do {
-            try audioEngine.start()
+            try audioEngine.start()  
+    #if os(iOS)
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+            try audioSession.setActive(true)
+    #endif
             handlingVoice = true
         } catch {
             print("Failed to enable audio engine: \(error)")
