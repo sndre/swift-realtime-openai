@@ -204,7 +204,7 @@ public extension Conversation {
 	/// This won't stop playing back model responses. To fully stop handling voice conversations, call `stopHandlingVoice`.
 	@MainActor func stopListening() {
 		guard isListening else { return }
-
+        interruptSpeech()
 		audioEngine.inputNode.removeTap(onBus: 0)
 		isListening = false
 	}
