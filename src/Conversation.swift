@@ -55,6 +55,12 @@ public final class Conversation: @unchecked Sendable {
 	/// Whether the model is currently speaking.
 	@MainActor public private(set) var isPlaying: Bool = false
 
+	/// Enables verbose logging for debugging conversation flow and audio playback.
+	public var debugLoggingEnabled: Bool = false
+
+    /// Retry policy
+	private let responseRetryBaseDelayMs: UInt64 = 50
+
 	/// A list of messages in the conversation.
 	/// Note that this doesn't include function call events. To get a complete list, use `entries`.
 	@MainActor public var messages: [Item.Message] {
@@ -62,6 +68,48 @@ public final class Conversation: @unchecked Sendable {
 			case let .message(message): return message
 			default: return nil
 		} }
+	}
+
+	/// Delete all conversation items except those in `keepIds`.
+	/// Always preserves the most recent assistant message to avoid pruning in-flight responses.
+	@MainActor public func pruneHistory(keeping keepIds: Set<String>) async {
+		let mostRecentAssistantId = entries.reversed().compactMap { item -> String? in
+			guard case let .message(message) = item, message.role == .assistant else { return nil }
+			return message.id
+		}.first
+
+		var keepIds = keepIds
+		if let mostRecentAssistantId {
+			keepIds.insert(mostRecentAssistantId)
+		}
+
+		let itemsToDelete = entries.filter { !keepIds.contains($0.id) }
+		for item in itemsToDelete {
+			do {
+				try await send(event: .deleteConversationItem(for: item.id))
+			} catch {
+				print("Failed to delete conversation item \(item.id): \(error)")
+			}
+		}
+
+		let idsToDelete = Set(itemsToDelete.map(\.id))
+		entries.removeAll { idsToDelete.contains($0.id) }
+	}
+
+	/// Wait until a conversation item with the provided ID appears in `entries` or the timeout expires.
+	/// Returns true if the item was observed before the deadline.
+	@MainActor public func waitForItem(id: String, timeout: Duration = .seconds(2)) async -> Bool {
+		let clock = ContinuousClock()
+		let deadline = clock.now.advanced(by: timeout)
+
+		while entries.firstIndex(where: { $0.id == id }) == nil {
+			if clock.now >= deadline {
+				return false
+			}
+			try? await Task.sleep(for: .milliseconds(50))
+		}
+
+		return true
 	}
 
 	private init(client: RealtimeAPI) {
@@ -154,6 +202,12 @@ public final class Conversation: @unchecked Sendable {
 	/// Send a client event to the server.
 	/// > Warning: This function is intended for advanced use cases. Use the other functions to send messages and audio data.
 	public func send(event: ClientEvent) async throws {
+		switch event {
+		case .appendInputAudioBuffer:
+			break
+		default:
+			debugLog("send event: \(describeEvent(event))")
+		}
 		try await client.send(event: event)
 	}
 
@@ -233,6 +287,7 @@ public extension Conversation {
             try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
             try audioSession.setActive(true)
     #endif
+            debugLog("voice handling started: engineRunning=\(audioEngine.isRunning) attached=\(audioEngine.attachedNodes.contains(playerNode))")
             handlingVoice = true
         } catch {
             print("Failed to enable audio engine: \(error)")
@@ -250,6 +305,7 @@ public extension Conversation {
 		guard !isInterrupting else { return }
 		isInterrupting = true
 
+		debugLog("interrupt speech: isPlaying=\(isPlaying) queuedEmpty=\(queuedSamples.isEmpty)")
 		if isPlaying,
 		   let nodeTime = playerNode.lastRenderTime,
 		   let playerTime = playerNode.playerTime(forNodeTime: nodeTime),
@@ -316,8 +372,10 @@ extension Conversation {
 				id = event.conversation.id
 			case let .conversationItemCreated(event):
 				entries.append(event.item)
+				debugLog("item created: \(describeItem(event.item)) total=\(entries.count)")
 			case let .conversationItemDeleted(event):
 				entries.removeAll { $0.id == event.itemId }
+				debugLog("item deleted: id=\(event.itemId) remaining=\(entries.count)")
 			case let .conversationItemInputAudioTranscriptionCompleted(event):
 				updateEvent(id: event.itemId) { message in
 					guard case let .input_audio(audio) = message.content[event.contentIndex] else { return }
@@ -334,6 +392,25 @@ extension Conversation {
 				updateEvent(id: event.itemId) { message in
 					message.content[event.contentIndex] = .init(from: event.part)
 				}
+			case let .outputAudioBufferStarted(event):
+				debugLog("output audio buffer started: responseId=\(event.responseId)")
+			case let .outputAudioBufferStopped(event):
+				debugLog("output audio buffer stopped: responseId=\(event.responseId)")
+			case let .responseCreated(event):
+				debugLog("response created: id=\(event.response.id) status=\(event.response.status.rawValue) details=\(describeStatusDetails(event.response.statusDetails))")
+			case let .responseDone(event):
+				debugLog("response done: id=\(event.response.id) status=\(event.response.status.rawValue) outputItems=\(event.response.output.count) details=\(describeStatusDetails(event.response.statusDetails))")
+				if event.response.status == .failed,
+				   event.response.output.isEmpty {
+					Task { @MainActor [weak self] in
+						guard let self else { return }
+						self.debugLog("retrying response after failure: id=\(event.response.id) delayMs=\(responseRetryBaseDelayMs)")
+						try? await Task.sleep(for: .milliseconds(responseRetryBaseDelayMs))
+                        try? await self.send(event: .createResponse(id: event.response.id))
+					}
+				}
+			case let .responseOutputItemAdded(event):
+				debugLog("response output item added: responseId=\(event.responseId) index=\(event.outputIndex) \(describeItem(event.item))")
 			case let .responseTextDelta(event):
 				updateEvent(id: event.itemId) { message in
 					guard case let .text(text) = message.content[event.contentIndex] else { return }
@@ -360,7 +437,9 @@ extension Conversation {
 				updateEvent(id: event.itemId) { message in
 					guard case let .audio(audio) = message.content[event.contentIndex] else { return }
 
-					if handlingVoice { queueAudioSample(event) }
+					if handlingVoice {
+						queueAudioSample(event)
+					}
 					message.content[event.contentIndex] = .audio(.init(audio: audio.audio + event.delta, transcript: audio.transcript))
 				}
 			case let .responseFunctionCallArgumentsDelta(event):
@@ -384,6 +463,7 @@ extension Conversation {
 
 					message = newMessage
 				}
+				debugLog("output item done: \(describeItem(event.item))")
 			default:
 				return
 		}
@@ -442,6 +522,7 @@ private extension Conversation {
 				Task { @MainActor in
 					playerNode.pause()                    
                     audioReplyCompletions.send(Date())
+					debugLog("audio playback completed: item=\(event.itemId)")
 				}
 			}
 		}
@@ -513,6 +594,70 @@ extension Conversation {
 				self.isPlaying = self.queuedSamples.isEmpty
                 self._keepIsPlayingPropertyUpdated()
 			}
+		}
+	}
+
+	private func debugLog(_ message: String) {
+		if debugLoggingEnabled {
+			print("[Conversation] \(message)")
+		}
+	}
+
+	private func describeItem(_ item: Item) -> String {
+		switch item {
+		case let .message(message):
+			let contentTypes = message.content.map(describeContent)
+			return "message id=\(message.id) role=\(message.role.rawValue) status=\(message.status.rawValue) content=\(contentTypes)"
+		case let .functionCall(functionCall):
+			return "function_call id=\(functionCall.id) name=\(functionCall.name) status=\(functionCall.status.rawValue)"
+		case let .functionCallOutput(output):
+			return "function_call_output callId=\(output.callId)"
+		}
+	}
+
+	private func describeContent(_ content: Item.Message.Content) -> String {
+		switch content {
+		case .text:
+			return "text"
+		case .audio:
+			return "audio"
+		case .input_text:
+			return "input_text"
+		case .input_audio:
+			return "input_audio"
+		}
+	}
+
+	private func describeStatusDetails(_ details: Response.StatusDetails?) -> String {
+		guard let details else { return "none" }
+		let errorCode = details.error?.code ?? "nil"
+		let errorType = details.error?.type ?? "nil"
+		let errorMessage = details.error?.message ?? "nil"
+		let reason = details.reason ?? "nil"
+		let type = details.type ?? "nil"
+		return "type=\(type) reason=\(reason) error.code=\(errorCode) error.type=\(errorType) error.message=\(errorMessage)"
+	}
+
+	private func describeEvent(_ event: ClientEvent) -> String {
+		switch event {
+		case let .createConversationItem(event):
+			return "createConversationItem \(describeItem(event.item))"
+		case .createResponse:
+			return "createResponse"
+		case let .deleteConversationItem(event):
+			return "deleteConversationItem id=\(event.itemId ?? "nil")"
+		case let .truncateConversationItem(event):
+			return "truncateConversationItem id=\(event.itemId ?? "nil") atAudioMs=\(event.audioEndMs)"
+		case let .appendInputAudioBuffer(event):
+			return "appendInputAudioBuffer base64Chars=\(event.audio.count)"
+		case .commitInputAudioBuffer:
+			return "commitInputAudioBuffer"
+		case .clearInputAudioBuffer:
+			return "clearInputAudioBuffer"
+		case let .updateSession(event):
+			return "updateSession voice=\(event.session.voice.rawValue) tools=\(event.session.tools.count)"
+		default:
+			return "event \(String(describing: event))"
 		}
 	}
 }

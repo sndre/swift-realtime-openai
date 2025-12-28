@@ -5,6 +5,7 @@ import FoundationNetworking
 #endif
 
 public final class WebRTCConnector: NSObject, Connector, Sendable {
+    nonisolated(unsafe) public static var debugLoggingEnabled: Bool = false
 	enum WebRTCError: Error {
 		case failedToCreateDataChannel
 		case failedToCreatePeerConnection
@@ -137,6 +138,13 @@ extension WebRTCConnector: RTCPeerConnectionDelegate {
 
 extension WebRTCConnector: RTCDataChannelDelegate {
 	public func dataChannel(_: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+		if Self.debugLoggingEnabled {
+			if let text = String(data: buffer.data, encoding: .utf8) {
+				print("[WebRTCConnector] raw event: \(text)")
+			} else {
+				print("[WebRTCConnector] raw event (base64): \(buffer.data.base64EncodedString())")
+			}
+		}
 		stream.yield(with: Result { try self.decoder.decode(ServerEvent.self, from: buffer.data) })
 	}
 

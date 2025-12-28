@@ -4,6 +4,7 @@ import FoundationNetworking
 #endif
 
 public final class WebSocketConnector: Connector, Sendable {
+    nonisolated(unsafe) public static var debugLoggingEnabled: Bool = false
 	@MainActor public private(set) var onDisconnect: (@Sendable () -> Void)? = nil
 	public let events: AsyncThrowingStream<ServerEvent, Error>
 
@@ -44,6 +45,9 @@ public final class WebSocketConnector: Connector, Sendable {
 						continue
 					}
 
+					if Self.debugLoggingEnabled {
+						print("[WebSocketConnector] raw event: \(text)")
+					}
 					try stream.yield(decoder.decode(ServerEvent.self, from: data))
 				} catch {
 					stream.yield(error: error)
